@@ -1,0 +1,392 @@
+{% extends "base.html" %}
+
+{% block title %}实时监控 - 城市空气质量监控仪表盘{% endblock %}
+
+{% block content %}
+<!-- 统计概览 -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">监测城市</div>
+        <div class="stat-value">{{ records|length }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">平均 AQI</div>
+        <div class="stat-value" id="avgAqi">-</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">优良城市</div>
+        <div class="stat-value" id="goodCities">-</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">污染城市</div>
+        <div class="stat-value" id="pollutedCities" style="color: #ff5722;">-</div>
+    </div>
+</div>
+
+<!-- 地图和排行榜 -->
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+    <!-- 全国AQI地图 -->
+    <div class="card" style="grid-column: 1 / -1;">
+        <div class="card-title">
+            <span>🗺️</span>
+            全国 AQI 分布热力图
+        </div>
+        <div id="mapChart" class="chart-container" style="height: 500px;"></div>
+    </div>
+    
+    <!-- AQI排行榜 -->
+    <div class="card">
+        <div class="card-title">
+            <span>📊</span>
+            城市 AQI 实时排行榜
+        </div>
+        <div class="filter-bar">
+            <select id="provinceFilter">
+                <option value="">全部省份</option>
+                {% for province in provinces %}
+                <option value="{{ province }}">{{ province }}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-primary" onclick="refreshData()">🔄 刷新数据</button>
+        </div>
+        <div style="max-height: 500px; overflow-y: auto;">
+            <table class="data-table" id="rankingTable">
+                <thead>
+                    <tr>
+                        <th>排名</th>
+                        <th>城市</th>
+                        <th>省份</th>
+                        <th>AQI</th>
+                        <th>等级</th>
+                        <th>首要污染物</th>
+                    </tr>
+                </thead>
+                <tbody id="rankingBody">
+                    <!-- 动态生成 -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- AQI等级分布 -->
+    <div class="card">
+        <div class="card-title">
+            <span>🥧</span>
+            AQI 等级分布
+        </div>
+        <div id="pieChart" class="chart-container" style="height: 500px;"></div>
+    </div>
+</div>
+
+<!-- 实时数据表格 -->
+<div class="card">
+    <div class="card-title">
+        <span>📋</span>
+        实时监测数据详情
+    </div>
+    <div style="overflow-x: auto;">
+        <table class="data-table" id="detailTable">
+            <thead>
+                <tr>
+                    <th>城市</th>
+                    <th>AQI</th>
+                    <th>等级</th>
+                    <th>PM2.5</th>
+                    <th>PM10</th>
+                    <th>SO2</th>
+                    <th>NO2</th>
+                    <th>CO</th>
+                    <th>O3</th>
+                    <th>首要污染物</th>
+                    <th>更新时间</th>
+                </tr>
+            </thead>
+            <tbody id="detailBody">
+                <!-- 动态生成 -->
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let mapChart, pieChart;
+let currentData = [];
+
+// AQI颜色映射
+const aqiColors = {
+    '优': '#00e400',
+    '良': '#ffcc00',
+    '轻度污染': '#ff7e00',
+    '中度污染': '#ff0000',
+    '重度污染': '#99004c',
+    '严重污染': '#7e0023'
+};
+
+const aqiBgClasses = {
+    '优': 'aqi-bg-excellent',
+    '良': 'aqi-bg-good',
+    '轻度污染': 'aqi-bg-mild',
+    '中度污染': 'aqi-bg-moderate',
+    '重度污染': 'aqi-bg-severe',
+    '严重污染': 'aqi-bg-serious'
+};
+
+// 初始化图表
+function initCharts() {
+    mapChart = echarts.init(document.getElementById('mapChart'));
+    pieChart = echarts.init(document.getElementById('pieChart'));
+    
+    window.addEventListener('resize', () => {
+        mapChart.resize();
+        pieChart.resize();
+    });
+}
+
+// 获取地图数据
+async function loadMapData() {
+    try {
+        // 中国地图 GeoJSON
+        const response = await fetch('https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json');
+        const chinaJson = await response.json();
+        echarts.registerMap('china', chinaJson);
+        
+        // 加载数据
+        await refreshData();
+    } catch (error) {
+        console.error('加载地图失败:', error);
+        // 使用备用方案 - 散点图
+        await refreshData();
+    }
+}
+
+// 刷新数据
+async function refreshData() {
+    try {
+        const province = document.getElementById('provinceFilter').value;
+        const url = province ? `/api/current?province=${encodeURIComponent(province)}` : '/api/current';
+        
+        const response = await fetch(url);
+        currentData = await response.json();
+        
+        updateStats();
+        updateRanking();
+        updateDetailTable();
+        updateMap();
+        updatePieChart();
+    } catch (error) {
+        console.error('获取数据失败:', error);
+    }
+}
+
+// 更新统计数据
+function updateStats() {
+    if (currentData.length === 0) return;
+    
+    const avgAqi = Math.round(currentData.reduce((sum, d) => sum + d.aqi, 0) / currentData.length);
+    const goodCities = currentData.filter(d => d.aqi <= 100).length;
+    const pollutedCities = currentData.filter(d => d.aqi > 100).length;
+    
+    document.getElementById('avgAqi').textContent = avgAqi;
+    document.getElementById('goodCities').textContent = goodCities;
+    document.getElementById('pollutedCities').textContent = pollutedCities;
+}
+
+// 更新排行榜
+function updateRanking() {
+    const tbody = document.getElementById('rankingBody');
+    tbody.innerHTML = '';
+    
+    currentData.forEach((item, index) => {
+        const row = document.createElement('tr');
+        const bgClass = aqiBgClasses[item.aqi_level] || '';
+        
+        row.innerHTML = `
+            <td>${index + 1}</td>
+            <td><a href="/city/${item.city}">${item.city}</a></td>
+            <td>${item.province}</td>
+            <td><span class="aqi-badge ${bgClass}">${item.aqi}</span></td>
+            <td>${item.aqi_level}</td>
+            <td>${item.primary_pollutant || '-'}</td>
+        `;
+        tbody.appendChild(row);
+    });
+}
+
+// 更新详细表格
+function updateDetailTable() {
+    const tbody = document.getElementById('detailBody');
+    tbody.innerHTML = '';
+    
+    currentData.forEach(item => {
+        const row = document.createElement('tr');
+        const bgClass = aqiBgClasses[item.aqi_level] || '';
+        
+        row.innerHTML = `
+            <td><a href="/city/${item.city}">${item.city}</a></td>
+            <td><span class="aqi-badge ${bgClass}">${item.aqi}</span></td>
+            <td>${item.aqi_level}</td>
+            <td>${item.pm25}</td>
+            <td>${item.pm10}</td>
+            <td>${item.so2}</td>
+            <td>${item.no2}</td>
+            <td>${item.co}</td>
+            <td>${item.o3}</td>
+            <td>${item.primary_pollutant || '-'}</td>
+            <td>${new Date(item.timestamp).toLocaleString()}</td>
+        `;
+        tbody.appendChild(row);
+    });
+}
+
+// 更新地图
+function updateMap() {
+    const scatterData = currentData.map(item => ({
+        name: item.city,
+        value: [item.lng, item.lat, item.aqi],
+        itemStyle: {
+            color: item.aqi_color
+        }
+    }));
+    
+    const option = {
+        tooltip: {
+            trigger: 'item',
+            formatter: function(params) {
+                if (params.data) {
+                    return `${params.data.name}<br/>AQI: ${params.data.value[2]}<br/>等级: ${params.data.aqi_level}`;
+                }
+                return params.name;
+            }
+        },
+        geo: {
+            map: 'china',
+            roam: true,
+            zoom: 1.2,
+            label: {
+                show: false
+            },
+            itemStyle: {
+                areaColor: '#e0e0e0',
+                borderColor: '#999'
+            },
+            emphasis: {
+                itemStyle: {
+                    areaColor: '#d0d0d0'
+                }
+            }
+        },
+        visualMap: {
+            min: 0,
+            max: 300,
+            left: 'left',
+            top: 'bottom',
+            text: ['高', '低'],
+            calculable: true,
+            inRange: {
+                color: ['#00e400', '#ffcc00', '#ff7e00', '#ff0000', '#99004c', '#7e0023']
+            }
+        },
+        series: [
+            {
+                name: 'AQI',
+                type: 'scatter',
+                coordinateSystem: 'geo',
+                data: scatterData,
+                symbolSize: function(val) {
+                    return Math.max(8, Math.min(30, val[2] / 10));
+                },
+                label: {
+                    show: true,
+                    formatter: '{b}',
+                    position: 'right',
+                    fontSize: 10
+                },
+                emphasis: {
+                    scale: 1.5,
+                    label: {
+                        show: true
+                    }
+                }
+            }
+        ]
+    };
+    
+    // 如果没有地图数据，使用简化版
+    if (!echarts.getMap('china')) {
+        option.geo = null;
+        option.xAxis = { show: false, min: 70, max: 140 };
+        option.yAxis = { show: false, min: 15, max: 55 };
+        option.series[0].coordinateSystem = null;
+        option.series[0].type = 'scatter';
+        option.series[0].data = scatterData.map(d => ({
+            name: d.name,
+            value: d.value,
+            itemStyle: d.itemStyle
+        }));
+    }
+    
+    mapChart.setOption(option);
+}
+
+// 更新饼图
+function updatePieChart() {
+    const levelCount = {};
+    currentData.forEach(item => {
+        levelCount[item.aqi_level] = (levelCount[item.aqi_level] || 0) + 1;
+    });
+    
+    const pieData = Object.entries(levelCount).map(([level, count]) => ({
+        name: level,
+        value: count,
+        itemStyle: {
+            color: aqiColors[level] || '#999'
+        }
+    }));
+    
+    const option = {
+        tooltip: {
+            trigger: 'item',
+            formatter: '{b}: {c} ({d}%)'
+        },
+        legend: {
+            orient: 'vertical',
+            right: '10%',
+            top: 'center'
+        },
+        series: [
+            {
+                name: 'AQI等级',
+                type: 'pie',
+                radius: ['40%', '70%'],
+                center: ['40%', '50%'],
+                avoidLabelOverlap: false,
+                itemStyle: {
+                    borderRadius: 10,
+                    borderColor: '#fff',
+                    borderWidth: 2
+                },
+                label: {
+                    show: true,
+                    formatter: '{b}\n{c}个'
+                },
+                data: pieData
+            }
+        ]
+    };
+    
+    pieChart.setOption(option);
+}
+
+// 省份筛选变化
+document.getElementById('provinceFilter').addEventListener('change', refreshData);
+
+// 初始化
+initCharts();
+loadMapData();
+
+// 自动刷新
+setInterval(refreshData, 60000);
+</script>
+{% endblock %}

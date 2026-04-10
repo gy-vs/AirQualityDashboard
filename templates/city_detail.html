@@ -1,0 +1,374 @@
+{% extends "base.html" %}
+
+{% block title %}{{ city.name }}空气质量详情 - 城市空气质量监控仪表盘{% endblock %}
+
+{% block content %}
+<!-- 返回按钮和城市标题 -->
+<div style="margin-bottom: 20px;">
+    <a href="/" class="btn btn-primary">← 返回首页</a>
+</div>
+
+<div class="card">
+    <div class="card-title" style="font-size: 24px;">
+        <span>🏙️</span>
+        {{ city.name }}空气质量实时监测
+        <span style="font-size: 14px; color: #666; margin-left: 10px;">{{ city.province }}</span>
+    </div>
+    
+    {% if latest %}
+    <!-- 当前AQI大卡片 -->
+    <div style="display: flex; justify-content: center; margin: 30px 0;">
+        <div id="aqiCard" style="text-align: center; padding: 40px 60px; border-radius: 16px; background: {{ get_aqi_color(latest.aqi) }};">
+            <div style="font-size: 72px; font-weight: bold; line-height: 1;">{{ latest.aqi }}</div>
+            <div style="font-size: 24px; margin-top: 10px;">{{ latest.aqi_level }}</div>
+            <div style="font-size: 14px; margin-top: 10px; opacity: 0.9;">
+                首要污染物: {{ latest.primary_pollutant or '无' }}
+            </div>
+            <div style="font-size: 12px; margin-top: 10px; opacity: 0.8;">
+                更新时间: {{ latest.timestamp.strftime('%Y-%m-%d %H:%M') }}
+            </div>
+        </div>
+    </div>
+    
+    <!-- 六项污染物指标 -->
+    <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; margin-bottom: 30px;">
+        <div class="stat-card" style="text-align: center;">
+            <div class="stat-label">PM2.5</div>
+            <div class="stat-value" style="font-size: 24px;">{{ latest.pm25 }}</div>
+            <div style="font-size: 12px; color: #999;">μg/m³</div>
+        </div>
+        <div class="stat-card" style="text-align: center;">
+            <div class="stat-label">PM10</div>
+            <div class="stat-value" style="font-size: 24px;">{{ latest.pm10 }}</div>
+            <div style="font-size: 12px; color: #999;">μg/m³</div>
+        </div>
+        <div class="stat-card" style="text-align: center;">
+            <div class="stat-label">SO₂</div>
+            <div class="stat-value" style="font-size: 24px;">{{ latest.so2 }}</div>
+            <div style="font-size: 12px; color: #999;">μg/m³</div>
+        </div>
+        <div class="stat-card" style="text-align: center;">
+            <div class="stat-label">NO₂</div>
+            <div class="stat-value" style="font-size: 24px;">{{ latest.no2 }}</div>
+            <div style="font-size: 12px; color: #999;">μg/m³</div>
+        </div>
+        <div class="stat-card" style="text-align: center;">
+            <div class="stat-label">CO</div>
+            <div class="stat-value" style="font-size: 24px;">{{ latest.co }}</div>
+            <div style="font-size: 12px; color: #999;">mg/m³</div>
+        </div>
+        <div class="stat-card" style="text-align: center;">
+            <div class="stat-label">O₃</div>
+            <div class="stat-value" style="font-size: 24px;">{{ latest.o3 }}</div>
+            <div style="font-size: 12px; color: #999;">μg/m³</div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- 图表区域 -->
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+    <!-- 24小时趋势 -->
+    <div class="card">
+        <div class="card-title">
+            <span>📈</span>
+            24小时污染物浓度趋势
+        </div>
+        <div id="hourlyChart" class="chart-container"></div>
+    </div>
+    
+    <!-- 污染物占比雷达图 -->
+    <div class="card">
+        <div class="card-title">
+            <span>🎯</span>
+            污染物占比雷达图
+        </div>
+        <div id="radarChart" class="chart-container"></div>
+    </div>
+    
+    <!-- 7天AQI变化 -->
+    <div class="card" style="grid-column: 1 / -1;">
+        <div class="card-title">
+            <span>📊</span>
+            最近7天 AQI 变化趋势
+        </div>
+        <div id="dailyChart" class="chart-container"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const cityName = '{{ city.name }}';
+
+// 初始化图表
+const hourlyChart = echarts.init(document.getElementById('hourlyChart'));
+const radarChart = echarts.init(document.getElementById('radarChart'));
+const dailyChart = echarts.init(document.getElementById('dailyChart'));
+
+window.addEventListener('resize', () => {
+    hourlyChart.resize();
+    radarChart.resize();
+    dailyChart.resize();
+});
+
+// 加载数据
+async function loadData() {
+    try {
+        // 24小时数据
+        const hourlyResponse = await fetch(`/api/city/${cityName}/hourly`);
+        const hourlyData = await hourlyResponse.json();
+        
+        // 7天数据
+        const dailyResponse = await fetch(`/api/city/${cityName}/daily?days=7`);
+        const dailyData = await dailyResponse.json();
+        
+        updateHourlyChart(hourlyData);
+        updateRadarChart(hourlyData);
+        updateDailyChart(dailyData);
+    } catch (error) {
+        console.error('加载数据失败:', error);
+    }
+}
+
+// 24小时趋势图
+function updateHourlyChart(data) {
+    const hours = data.map(d => d.hour);
+    
+    const option = {
+        tooltip: {
+            trigger: 'axis'
+        },
+        legend: {
+            data: ['PM2.5', 'PM10', 'SO2', 'NO2', 'CO', 'O3'],
+            bottom: 0
+        },
+        grid: {
+            left: '3%',
+            right: '4%',
+            bottom: '15%',
+            containLabel: true
+        },
+        xAxis: {
+            type: 'category',
+            boundaryGap: false,
+            data: hours
+        },
+        yAxis: {
+            type: 'value',
+            name: '浓度'
+        },
+        series: [
+            {
+                name: 'PM2.5',
+                type: 'line',
+                data: data.map(d => d.pm25),
+                smooth: true,
+                itemStyle: { color: '#ff6b6b' }
+            },
+            {
+                name: 'PM10',
+                type: 'line',
+                data: data.map(d => d.pm10),
+                smooth: true,
+                itemStyle: { color: '#4ecdc4' }
+            },
+            {
+                name: 'SO2',
+                type: 'line',
+                data: data.map(d => d.so2),
+                smooth: true,
+                itemStyle: { color: '#45b7d1' }
+            },
+            {
+                name: 'NO2',
+                type: 'line',
+                data: data.map(d => d.no2),
+                smooth: true,
+                itemStyle: { color: '#96ceb4' }
+            },
+            {
+                name: 'CO',
+                type: 'line',
+                data: data.map(d => d.co * 10), // CO放大10倍便于显示
+                smooth: true,
+                itemStyle: { color: '#feca57' }
+            },
+            {
+                name: 'O3',
+                type: 'line',
+                data: data.map(d => d.o3),
+                smooth: true,
+                itemStyle: { color: '#ff9ff3' }
+            }
+        ]
+    };
+    
+    hourlyChart.setOption(option);
+}
+
+// 雷达图
+function updateRadarChart(data) {
+    if (data.length === 0) return;
+    
+    // 计算各项污染物的平均值
+    const avgData = {
+        pm25: data.reduce((sum, d) => sum + d.pm25, 0) / data.length,
+        pm10: data.reduce((sum, d) => sum + d.pm10, 0) / data.length,
+        so2: data.reduce((sum, d) => sum + d.so2, 0) / data.length,
+        no2: data.reduce((sum, d) => sum + d.no2, 0) / data.length,
+        co: data.reduce((sum, d) => sum + d.co, 0) / data.length,
+        o3: data.reduce((sum, d) => sum + d.o3, 0) / data.length,
+    };
+    
+    // 归一化数据（用于雷达图显示）
+    const maxValues = {
+        pm25: 150,
+        pm10: 200,
+        so2: 100,
+        no2: 100,
+        co: 10,
+        o3: 200
+    };
+    
+    const normalizedData = [
+        (avgData.pm25 / maxValues.pm25 * 100).toFixed(1),
+        (avgData.pm10 / maxValues.pm10 * 100).toFixed(1),
+        (avgData.so2 / maxValues.so2 * 100).toFixed(1),
+        (avgData.no2 / maxValues.no2 * 100).toFixed(1),
+        (avgData.co / maxValues.co * 100).toFixed(1),
+        (avgData.o3 / maxValues.o3 * 100).toFixed(1)
+    ];
+    
+    const option = {
+        tooltip: {
+            trigger: 'item',
+            formatter: function(params) {
+                return `${params.name}<br/>
+                        PM2.5: ${avgData.pm25.toFixed(1)}<br/>
+                        PM10: ${avgData.pm10.toFixed(1)}<br/>
+                        SO2: ${avgData.so2.toFixed(1)}<br/>
+                        NO2: ${avgData.no2.toFixed(1)}<br/>
+                        CO: ${avgData.co.toFixed(2)}<br/>
+                        O3: ${avgData.o3.toFixed(1)}`;
+            }
+        },
+        radar: {
+            indicator: [
+                { name: 'PM2.5', max: 100 },
+                { name: 'PM10', max: 100 },
+                { name: 'SO2', max: 100 },
+                { name: 'NO2', max: 100 },
+                { name: 'CO', max: 100 },
+                { name: 'O3', max: 100 }
+            ],
+            shape: 'polygon',
+            splitNumber: 4,
+            axisName: {
+                color: '#666'
+            },
+            splitLine: {
+                lineStyle: {
+                    color: 'rgba(0,0,0,0.1)'
+                }
+            },
+            splitArea: {
+                areaStyle: {
+                    color: ['rgba(26,115,232,0.05)', 'rgba(26,115,232,0.1)']
+                }
+            }
+        },
+        series: [{
+            name: '污染物占比',
+            type: 'radar',
+            data: [{
+                value: normalizedData,
+                name: '24小时平均',
+                areaStyle: {
+                    color: 'rgba(26,115,232,0.3)'
+                },
+                lineStyle: {
+                    color: '#1a73e8',
+                    width: 2
+                },
+                itemStyle: {
+                    color: '#1a73e8'
+                }
+            }]
+        }]
+    };
+    
+    radarChart.setOption(option);
+}
+
+// 7天AQI变化
+function updateDailyChart(data) {
+    const dates = data.map(d => d.date);
+    const avgAqi = data.map(d => d.avg_aqi);
+    const maxAqi = data.map(d => d.max_aqi);
+    const minAqi = data.map(d => d.min_aqi);
+    
+    const option = {
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: {
+                type: 'shadow'
+            }
+        },
+        legend: {
+            data: ['平均AQI', '最高AQI', '最低AQI'],
+            bottom: 0
+        },
+        grid: {
+            left: '3%',
+            right: '4%',
+            bottom: '15%',
+            containLabel: true
+        },
+        xAxis: {
+            type: 'category',
+            data: dates
+        },
+        yAxis: {
+            type: 'value',
+            name: 'AQI'
+        },
+        series: [
+            {
+                name: '平均AQI',
+                type: 'bar',
+                data: avgAqi,
+                itemStyle: {
+                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                        { offset: 0, color: '#1a73e8' },
+                        { offset: 1, color: '#64b5f6' }
+                    ])
+                }
+            },
+            {
+                name: '最高AQI',
+                type: 'line',
+                data: maxAqi,
+                itemStyle: { color: '#ff5722' },
+                lineStyle: { type: 'dashed' }
+            },
+            {
+                name: '最低AQI',
+                type: 'line',
+                data: minAqi,
+                itemStyle: { color: '#4caf50' },
+                lineStyle: { type: 'dashed' }
+            }
+        ]
+    };
+    
+    dailyChart.setOption(option);
+}
+
+// 加载数据
+loadData();
+
+// 每30秒刷新
+setInterval(loadData, 30000);
+</script>
+{% endblock %}

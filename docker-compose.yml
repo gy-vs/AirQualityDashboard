@@ -1,0 +1,10 @@
+services:
+  airquality:
+    build: .
+    ports:
+      - "80:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///data/air_quality.db
+    restart: unless-stopped
