@@ -318,36 +318,41 @@ async def export_data(
         AirQualityRecord.timestamp < end
     ).order_by(AirQualityRecord.timestamp.desc()).all()
     
-    # 生成CSV
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
+    # 生成CSV内容
+    lines = []
+    # 添加BOM以支持Excel中文显示
+    lines.append('\ufeff' + ','.join([
         "时间", "城市", "AQI", "空气质量等级", "PM2.5", "PM10", 
         "SO2", "NO2", "CO", "O3", "首要污染物"
-    ])
+    ]))
     
     for r in records:
-        writer.writerow([
+        line = ','.join([
             r.timestamp.strftime("%Y-%m-%d %H:%M"),
             city_obj.name,
-            r.aqi,
+            str(r.aqi),
             r.aqi_level,
-            r.pm25,
-            r.pm10,
-            r.so2,
-            r.no2,
-            r.co,
-            r.o3,
+            str(r.pm25),
+            str(r.pm10),
+            str(r.so2),
+            str(r.no2),
+            str(r.co),
+            str(r.o3),
             r.primary_pollutant or "无"
         ])
+        lines.append(line)
     
-    output.seek(0)
+    csv_content = '\n'.join(lines)
+    
+    # 对中文文件名进行URL编码
+    from urllib.parse import quote
+    safe_filename = quote(f"{city}_air_quality_{start_date}_{end_date}.csv")
     
     return StreamingResponse(
-        io.BytesIO(output.getvalue().encode('utf-8-sig')),
-        media_type="text/csv",
+        iter([csv_content]),
+        media_type="text/csv; charset=utf-8-sig",
         headers={
-            "Content-Disposition": f"attachment; filename={city}_air_quality_{start_date}_{end_date}.csv"
+            "Content-Disposition": f"attachment; filename*=UTF-8''{safe_filename}"
         }
     )
 
