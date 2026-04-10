@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>历史数据查询</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei', sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: #fff; min-height: 100vh; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; padding: 20px; background: rgba(255,255,255,0.05); border-radius: 10px; margin-bottom: 20px; }
+        .header h1 { font-size: 28px; margin-bottom: 10px; }
+        .back-link { color: #4ecdc4; text-decoration: none; font-size: 16px; }
+        .back-link:hover { text-decoration: underline; }
+        .query-bar { display: flex; gap: 15px; align-items: center; justify-content: center; padding: 25px; background: rgba(255,255,255,0.03); border-radius: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .query-bar label { font-size: 14px; color: #aaa; }
+        .query-bar select, .query-bar input { padding: 10px 15px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #fff; font-size: 14px; min-width: 120px; }
+        .btn { padding: 10px 25px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; font-weight: bold; transition: all 0.3s; }
+        .btn-primary { background: linear-gradient(135deg, #4ecdc4, #44a08d); color: #fff; }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(78, 205, 196, 0.3); }
+        .btn-success { background: linear-gradient(135deg, #56ab2f, #a8e063); color: #fff; }
+        .btn-success:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(86, 171, 47, 0.3); }
+        .content { display: grid; grid-template-columns: 1fr; gap: 20px; }
+        .panel { background: rgba(255,255,255,0.05); border-radius: 10px; padding: 20px; }
+        .panel h2 { font-size: 18px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .chart { width: 100%; height: 400px; }
+        .result-info { display: flex; gap: 40px; justify-content: center; padding: 15px 0; }
+        .info-item { text-align: center; }
+        .info-item .value { font-size: 28px; font-weight: bold; color: #4ecdc4; }
+        .info-item .label { font-size: 14px; color: #888; }
+        .data-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 15px; }
+        .data-table th, .data-table td { padding: 10px 8px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .data-table th { color: #888; font-weight: normal; background: rgba(255,255,255,0.02); }
+        .table-container { max-height: 300px; overflow-y: auto; }
+        .no-data { text-align: center; padding: 40px; color: #666; font-size: 16px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/" class="back-link">← 返回仪表盘首页</a>
+            <h1>📊 历史空气质量数据查询</h1>
+        </div>
+        
+        <div class="query-bar">
+            <div>
+                <label>选择城市：</label>
+                <select id="citySelect"></select>
+            </div>
+            <div>
+                <label>开始日期：</label>
+                <input type="date" id="startDate">
+            </div>
+            <div>
+                <label>结束日期：</label>
+                <input type="date" id="endDate">
+            </div>
+            <button class="btn btn-primary" onclick="queryData()">🔍 查询数据</button>
+            <button class="btn btn-success" onclick="exportData()">📥 导出 CSV</button>
+        </div>
+        
+        <div class="content">
+            <div class="panel">
+                <h2>📈 AQI 趋势图</h2>
+                <div class="chart" id="trendChart"></div>
+                <div class="result-info" id="resultInfo" style="display: none;">
+                    <div class="info-item"><div class="value" id="totalRecords">0</div><div class="label">数据记录数</div></div>
+                    <div class="info-item"><div class="value" id="avgAqi">0</div><div class="label">期间平均 AQI</div></div>
+                    <div class="info-item"><div class="value" id="maxAqi">0</div><div class="label">期间最高 AQI</div></div>
+                    <div class="info-item"><div class="value" id="minAqi">0</div><div class="label">期间最低 AQI</div></div>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <h2>📋 数据详情</h2>
+                <div class="table-container">
+                    <table class="data-table" id="dataTable">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>AQI</th>
+                                <th>等级</th>
+                                <th>PM2.5</th>
+                                <th>PM10</th>
+                                <th>SO2</th>
+                                <th>NO2</th>
+                                <th>CO</th>
+                                <th>O3</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dataBody">
+                            <tr><td colspan="9" class="no-data">请选择查询条件后点击查询</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let trendChart;
+        let currentResult = [];
+        
+        function initChart() {
+            trendChart = echarts.init(document.getElementById('trendChart'));
+        }
+        
+        async function loadCities() {
+            const res = await fetch('/api/cities');
+            const data = await res.json();
+            const select = document.getElementById('citySelect');
+            data.cities.forEach(city => {
+                const opt = document.createElement('option');
+                opt.value = city.name;
+                opt.textContent = city.name;
+                select.appendChild(opt);
+            });
+            
+            const today = new Date();
+            const weekAgo = new Date();
+            weekAgo.setDate(today.getDate() - 7);
+            
+            document.getElementById('endDate').value = today.toISOString().split('T')[0];
+            document.getElementById('startDate').value = weekAgo.toISOString().split('T')[0];
+            
+            queryData();
+        }
+        
+        function getLevelColor(aqi) {
+            if (aqi <= 50) return '#00e400';
+            if (aqi <= 100) return '#ffff00';
+            if (aqi <= 150) return '#ff7e00';
+            if (aqi <= 200) return '#ff0000';
+            if (aqi <= 300) return '#99004c';
+            return '#7e0023';
+        }
+        
+        async function queryData() {
+            const city = document.getElementById('citySelect').value;
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            
+            if (!city || !startDate || !endDate) {
+                alert('请选择城市和日期范围');
+                return;
+            }
+            
+            const url = `/api/history?city=${encodeURIComponent(city)}&start_date=${startDate}&end_date=${endDate}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            
+            if (data.error) {
+                alert(data.error);
+                return;
+            }
+            
+            currentResult = data;
+            renderChart(data);
+            renderTable(data);
+            
+            document.getElementById('resultInfo').style.display = 'flex';
+        }
+        
+        function renderChart(data) {
+            if (data.length === 0) {
+                trendChart.clear();
+                document.getElementById('totalRecords').textContent = '0';
+                return;
+            }
+            
+            const timestamps = data.map(d => d.timestamp.split(' ')[0] + ' ' + d.timestamp.split(' ')[1].substring(0, 5));
+            const aqiData = data.map(d => d.aqi);
+            
+            const avg = Math.round(aqiData.reduce((a, b) => a + b, 0) / aqiData.length);
+            const max = Math.max(...aqiData);
+            const min = Math.min(...aqiData);
+            
+            document.getElementById('totalRecords').textContent = data.length;
+            document.getElementById('avgAqi').textContent = avg;
+            document.getElementById('maxAqi').textContent = max;
+            document.getElementById('minAqi').textContent = min;
+            
+            const colors = aqiData.map(getLevelColor);
+            
+            const option = {
+                tooltip: {
+                    trigger: 'axis',
+                    formatter: params => {
+                        const idx = params[0].dataIndex;
+                        const d = data[idx];
+                        return `<strong>${d.timestamp}</strong><br/>AQI: ${d.aqi} (${d.level})<br/>PM2.5: ${d.pm25} μg/m³<br/>PM10: ${d.pm10} μg/m³<br/>NO2: ${d.no2} μg/m³`;
+                    }
+                },
+                grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+                xAxis: {
+                    type: 'category',
+                    data: timestamps,
+                    axisLine: { lineStyle: { color: '#444' } },
+                    axisLabel: { color: '#888', fontSize: 10, rotate: 30 }
+                },
+                yAxis: {
+                    type: 'value',
+                    name: 'AQI 指数',
+                    nameTextStyle: { color: '#888' },
+                    axisLine: { lineStyle: { color: '#444' } },
+                    axisLabel: { color: '#888' },
+                    splitLine: { lineStyle: { color: '#222' } }
+                },
+                series: [{
+                    type: 'line',
+                    smooth: true,
+                    symbol: 'none',
+                    lineStyle: { width: 2, color: '#4ecdc4' },
+                    areaStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: 'rgba(78, 205, 196, 0.3)' },
+                            { offset: 1, color: 'rgba(78, 205, 196, 0.02)' }
+                        ])
+                    },
+                    data: aqiData
+                }]
+            };
+            
+            trendChart.setOption(option);
+        }
+        
+        function renderTable(data) {
+            const tbody = document.getElementById('dataBody');
+            
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" class="no-data">未查询到数据，请调整日期范围</td></tr>';
+                return;
+            }
+            
+            let html = '';
+            data.slice().reverse().forEach(d => {
+                const color = getLevelColor(d.aqi);
+                html += `<tr>
+                    <td style="font-size: 12px;">${d.timestamp}</td>
+                    <td style="color: ${color}; font-weight: bold;">${d.aqi}</td>
+                    <td style="color: ${color};">${d.level}</td>
+                    <td>${d.pm25}</td>
+                    <td>${d.pm10}</td>
+                    <td>${d.so2}</td>
+                    <td>${d.no2}</td>
+                    <td>${d.co}</td>
+                    <td>${d.o3}</td>
+                </tr>`;
+            });
+            tbody.innerHTML = html;
+        }
+        
+        async function exportData() {
+            const city = document.getElementById('citySelect').value;
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            
+            if (!city || !startDate || !endDate) {
+                alert('请先选择查询条件并查询数据');
+                return;
+            }
+            
+            const url = `/api/export?city=${encodeURIComponent(city)}&start_date=${startDate}&end_date=${endDate}`;
+            window.open(url, '_blank');
+        }
+        
+        function init() {
+            initChart();
+            loadCities();
+            
+            window.addEventListener('resize', () => {
+                trendChart.resize();
+            });
+        }
+        
+        init();
+    </script>
+</body>
+</html>

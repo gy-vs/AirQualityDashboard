@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>城市空气质量监控仪表盘</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/map/js/china.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei', sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: #fff; min-height: 100vh; }
+        .alert-banner { display: none; position: fixed; top: 0; left: 0; right: 0; background: linear-gradient(90deg, #ff0000, #ff4444); color: white; padding: 10px; text-align: center; font-weight: bold; font-size: 16px; z-index: 1000; animation: blink 1s infinite; }
+        @keyframes blink { 0%, 50%, 100% { opacity: 1; } 25%, 75% { opacity: 0.8; } }
+        .container { padding-top: 10px; }
+        .header { text-align: center; padding: 20px; background: rgba(255,255,255,0.05); }
+        .header h1 { font-size: 28px; margin-bottom: 10px; }
+        .header .time { color: #aaa; font-size: 14px; }
+        .summary-bar { display: flex; justify-content: center; gap: 40px; padding: 15px; background: rgba(255,255,255,0.03); }
+        .summary-item { text-align: center; }
+        .summary-item .value { font-size: 24px; font-weight: bold; color: #ffd700; }
+        .summary-item .label { font-size: 12px; color: #888; }
+        .content { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px; }
+        .panel { background: rgba(255,255,255,0.05); border-radius: 10px; padding: 20px; }
+        .panel h2 { font-size: 18px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .filter { margin-bottom: 15px; }
+        .filter select { padding: 8px 15px; border-radius: 5px; border: none; background: rgba(255,255,255,0.1); color: #fff; }
+        .ranking-table { width: 100%; border-collapse: collapse; }
+        .ranking-table th, .ranking-table td { padding: 10px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .ranking-table th { color: #888; font-weight: normal; }
+        .rank-num { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; }
+        .rank-1 { background: #ffd700; color: #000; }
+        .rank-2 { background: #c0c0c0; color: #000; }
+        .rank-3 { background: #cd7f32; color: #000; }
+        .city-link { color: #4ecdc4; text-decoration: none; }
+        .city-link:hover { text-decoration: underline; }
+        .level-indicator { padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        #china-map { width: 100%; height: 500px; }
+        .full-panel { grid-column: 1 / -1; }
+        .nav-bar { text-align: center; padding: 15px; }
+        .nav-bar a { color: #4ecdc4; margin: 0 20px; text-decoration: none; }
+        .nav-bar a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="alert-banner" id="alertBanner">
+        ⚠️ 污染预警：当前有多座城市 AQI 超过 200，属于重度污染水平！请密切关注！
+    </div>
+    <div class="container">
+        <div class="header">
+            <h1>🏭 城市空气质量实时监控仪表盘</h1>
+            <div class="time" id="currentTime"></div>
+        </div>
+        <div class="nav-bar">
+            <a href="/">🏠 首页监控</a>
+            <a href="/history">📊 历史数据查询</a>
+        </div>
+        <div class="summary-bar">
+            <div class="summary-item"><div class="value" id="totalCities">30</div><div class="label">监控城市</div></div>
+            <div class="summary-item"><div class="value" id="goodCount">-</div><div class="label">优良城市</div></div>
+            <div class="summary-item"><div class="value" id="highPollution">-</div><div class="label">轻度污染以上</div></div>
+            <div class="summary-item"><div class="value" id="avgAqi">-</div><div class="label">平均 AQI</div></div>
+        </div>
+        <div class="content">
+            <div class="panel">
+                <h2>📋 AQI 实时排行榜</h2>
+                <div class="filter">
+                    <select id="provinceFilter">
+                        <option value="">全部省份</option>
+                    </select>
+                </div>
+                <div style="max-height: 400px; overflow-y: auto;">
+                    <table class="ranking-table" id="rankingTable">
+                        <thead><tr><th>排名</th><th>城市</th><th>省份</th><th>AQI</th><th>等级</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="panel">
+                <h2>🗺️ 全国 AQI 热力分布图</h2>
+                <div id="china-map"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let mapChart;
+        let allCities = [];
+        
+        function initECharts() {
+            mapChart = echarts.init(document.getElementById('china-map'));
+        }
+        
+        async function loadCities() {
+            const res = await fetch('/api/cities');
+            const data = await res.json();
+            allCities = data.cities;
+            const select = document.getElementById('provinceFilter');
+            data.provinces.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                select.appendChild(opt);
+            });
+            select.onchange = loadRankingData;
+        }
+        
+        async function checkPollutionAlert() {
+            const res = await fetch('/api/high-pollution');
+            const data = await res.json();
+            const banner = document.getElementById('alertBanner');
+            if (data.critical_count > 0) {
+                banner.innerHTML = `⚠️ 紧急预警：${data.critical_count} 座城市（${data.critical_cities.map(c => c.city_name).join('、')}）AQI 已超过 200，属于严重污染！`;
+                banner.style.display = 'block';
+            } else if (data.high_aqi_count > 0) {
+                banner.style.display = 'none';
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+        
+        async function loadRankingData() {
+            const province = document.getElementById('provinceFilter').value;
+            const url = province ? `/api/ranking?province=${encodeURIComponent(province)}` : '/api/ranking';
+            const res = await fetch(url);
+            const data = await res.json();
+            
+            let goodCount = 0;
+            let totalAqi = 0;
+            data.forEach(d => {
+                totalAqi += d.aqi;
+                if (d.aqi <= 100) goodCount++;
+            });
+            
+            document.getElementById('goodCount').textContent = goodCount;
+            document.getElementById('highPollution').textContent = 30 - goodCount;
+            document.getElementById('avgAqi').textContent = data.length > 0 ? Math.round(totalAqi / data.length) : '-';
+            
+            const tbody = document.getElementById('rankingTable').querySelector('tbody');
+            tbody.innerHTML = '';
+            
+            data.forEach((item, idx) => {
+                const row = document.createElement('tr');
+                let rankClass = '';
+                if (idx === 0) rankClass = 'rank-1';
+                else if (idx === 1) rankClass = 'rank-2';
+                else if (idx === 2) rankClass = 'rank-3';
+                
+                let rowStyle = '';
+                if (item.aqi > 150) {
+                    rowStyle = 'background: rgba(255,0,0,0.2);';
+                } else if (item.aqi > 100) {
+                    rowStyle = 'background: rgba(255,126,0,0.1);';
+                }
+                
+                row.style = rowStyle;
+                row.innerHTML = `
+                    <td><div class="rank-num ${rankClass}">${idx + 1}</div></td>
+                    <td><a href="/city/${encodeURIComponent(item.city_name)}" class="city-link">${item.city_name}</a></td>
+                    <td>${item.province}</td>
+                    <td style="color: ${item.color}; font-weight: bold; font-size: 18px;">${item.aqi}</td>
+                    <td><span class="level-indicator" style="background: ${item.color}20; color: ${item.color};">${item.level}</span></td>
+                `;
+                tbody.appendChild(row);
+            });
+            
+            updateMap(data);
+        }
+        
+        function updateMap(data) {
+            const mapData = data.map(d => ({
+                name: d.city_name.replace('市', '').replace('省', ''),
+                value: d.aqi,
+                itemStyle: { color: d.color }
+            }));
+            
+            const option = {
+                tooltip: {
+                    trigger: 'item',
+                    formatter: params => {
+                        if (params.value) {
+                            const city = data.find(d => d.city_name.includes(params.name) || params.name.includes(d.city_name.replace('市', '')));
+                            if (city) {
+                                return `<strong>${city.city_name}</strong><br/>AQI: ${city.aqi}<br/>等级: ${city.level}`;
+                            }
+                        }
+                        return params.name;
+                    }
+                },
+                visualMap: {
+                    min: 0,
+                    max: 300,
+                    left: 'left',
+                    top: 'bottom',
+                    text: ['严重污染', '优'],
+                    inRange: {
+                        color: ['#00e400', '#ffff00', '#ff7e00', '#ff0000', '#99004c', '#7e0023']
+                    },
+                    calculable: true
+                },
+                series: [{
+                    type: 'map',
+                    map: 'china',
+                    roam: true,
+                    zoom: 1.2,
+                    label: { show: true, fontSize: 10, color: '#fff' },
+                    emphasis: {
+                        label: { color: '#fff', fontWeight: 'bold' },
+                        itemStyle: { areaColor: '#4ecdc4' }
+                    },
+                    data: mapData
+                }]
+            };
+            
+            mapChart.setOption(option);
+        }
+        
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('currentTime').textContent = 
+                `当前时间: ${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+        }
+        
+        function init() {
+            initECharts();
+            loadCities();
+            loadRankingData();
+            checkPollutionAlert();
+            updateTime();
+            
+            setInterval(() => {
+                loadRankingData();
+                checkPollutionAlert();
+                updateTime();
+            }, 30000);
+            
+            setInterval(updateTime, 1000);
+            
+            window.addEventListener('resize', () => {
+                mapChart.resize();
+            });
+        }
+        
+        init();
+    </script>
+</body>
+</html>
